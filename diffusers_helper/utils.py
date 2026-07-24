@@ -8,6 +8,7 @@ import einops
 import numpy as np
 import datetime
 import torchvision
+from torchcodec.encoders import VideoEncoder
 
 from PIL import Image
 
@@ -292,16 +293,31 @@ def save_bcthw_as_mp4(x, output_filename, fps=10, crf=0):
     )
     x = torch.clamp(x.float(), -1.0, 1.0) * 127.5 + 127.5
     x = x.detach().cpu().to(torch.uint8)
-    x = einops.rearrange(x, "(m n) c t h w -> t (m h) (n w) c", n=per_row)
-    torchvision.io.write_video(
-        output_filename,
-        x,
-        fps=fps,
-        video_codec="libx264",
-        options={"crf": str(int(crf))},
-    )
-    return x
 
+    try:
+        # torchvision wants (T, H, W, C)
+        x_thwc = einops.rearrange(x, "(m n) c t h w -> t (m h) (n w) c", n=per_row)
+        torchvision.io.write_video(
+            output_filename,
+            x_thwc,
+            fps=fps,
+            video_codec="libx264",
+            options={"crf": str(int(crf))},
+        )
+        x = x_thwc
+    except AttributeError:
+        # torchcodec wants (T, C, H, W)
+        x_tchw = einops.rearrange(x, "(m n) c t h w -> t c (m h) (n w)", n=per_row)
+        encoder = VideoEncoder(frames=x_tchw, frame_rate=fps)
+        encoder.to_file(
+            dest=output_filename,
+            codec="libx264",
+            pixel_format="yuv420p",
+            crf=crf,
+        )
+        x = x_tchw
+
+    return x
 
 def save_bcthw_as_png(x, output_filename):
     os.makedirs(
